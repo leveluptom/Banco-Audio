@@ -59,6 +59,12 @@ summary{cursor:pointer;font-weight:600;min-height:32px}
 .screen{position:relative;height:clamp(200px,32vh,330px);border-radius:10px;overflow:hidden;background:#062a24}
 .screen canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 .tag{position:absolute;top:8px;left:10px;font-size:13px;color:rgba(230,245,200,.75);pointer-events:none}
+.sbtn{position:absolute;top:6px;right:6px;display:flex;gap:6px;z-index:2}
+.sbtn button{min-height:40px;min-width:40px;padding:0 10px;background:rgba(6,42,36,.8);color:#e6f5c8;border-color:rgba(230,245,200,.3);font-size:14px;display:grid;place-items:center}
+.sbtn button[hidden]{display:none}
+.sbtn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.screen.fs{position:fixed;inset:0;height:100vh;height:100dvh;border-radius:0;z-index:50}
+.screen:fullscreen{height:100%;border-radius:0}
 .ctl{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;margin:10px 0 18px;font-size:14px;color:var(--mute)}
 .ctl label{display:flex;align-items:center;gap:6px}
 select{min-height:40px;border:1px solid var(--line);background:var(--btn);border-radius:8px;padding:0 8px;font-size:15px}
@@ -118,7 +124,7 @@ audio{width:100%;margin-top:8px}
     <div><span>Frequenza di picco</span><b id="rPk">—</b></div>
     <div><span>Livello del picco</span><b id="rPkDb">—</b></div>
   </div>
-  <div class="screen"><canvas id="scope"></canvas><span class="tag">Forma d'onda</span></div>
+  <div class="screen" id="scopeBox"><canvas id="scope"></canvas><span class="tag">Forma d'onda</span><div class="sbtn"><button class="fsb" data-t="scopeBox" aria-label="Schermo intero"></button></div></div>
   <div class="ctl">
     <label>Finestra <select id="tdiv"><option value="1">1 ms</option><option value="2">2 ms</option><option value="5">5 ms</option><option value="10" selected>10 ms</option><option value="20">20 ms</option><option value="50">50 ms</option><option value="100">100 ms</option><option value="200">200 ms</option><option value="500">500 ms</option></select></label>
     <label>Zoom <select id="yz"><option value="1">×1</option><option value="2">×2</option><option value="5">×5</option><option value="10">×10</option><option value="50">×50</option></select></label>
@@ -127,12 +133,14 @@ audio{width:100%;margin-top:8px}
   </div>
   <label class="fft"><input type="checkbox" id="fftOn" checked> Trasformata di Fourier (spettro)</label>
   <div id="specBox">
-    <div class="screen"><canvas id="spec"></canvas><span class="tag">Spettro</span></div>
+    <div class="screen" id="specBox2"><canvas id="spec"></canvas><span class="tag">Spettro</span><div class="sbtn"><button id="clrC" hidden>Cancella cursori</button><button class="fsb" data-t="specBox2" aria-label="Schermo intero"></button></div></div>
     <div class="ctl">
       <label>Punti FFT <select id="fftN"><option>1024</option><option>2048</option><option>4096</option><option selected>8192</option><option>16384</option><option>32768</option></select></label>
       <label>Asse <select id="ax"><option value="log">Logaritmico</option><option value="lin">Lineare</option></select></label>
       <label>Media <select id="avg"><option value="0">No</option><option value="0.5">Poca</option><option value="0.8" selected>Media</option><option value="0.95">Tanta</option></select></label>
       <label><input type="checkbox" id="hold"> Mantieni picchi</label>
+      <label><input type="checkbox" id="snap" checked> Cursore sul picco più vicino</label>
+      <span>Tocca o clicca lo spettro per aggiungere un cursore</span>
       <span id="res">Risoluzione: 5,86 Hz</span>
     </div>
   </div>
@@ -259,8 +267,52 @@ $('fftOn').onchange=e=>{$('specBox').hidden=!e.target.checked};
 $('fftN').onchange=e=>{if(spA){spA.fftSize=+e.target.value}showRes()};
 $('avg').onchange=e=>{if(spA)spA.smoothingTimeConstant=+e.target.value};
 $('hold').onchange=resetHold;
-$('spec').addEventListener('pointermove',e=>{curX=e.offsetX});
+$('spec').addEventListener('pointermove',e=>{curX=e.pointerType==='mouse'?e.offsetX:-1});
 $('spec').addEventListener('pointerleave',()=>{curX=-1});
+
+/* ---------- Cursori sullo spettro ---------- */
+let curs=[],map=null;
+const PAL=['#ffd166','#4cc9f0','#ff8fab','#b388ff','#ffffff','#ff9f1c','#72efdd','#9db4ff'];let nc=0;
+function pk(k){const bw=map.bw,a=fb[k-1],b=fb[k],c=fb[k+1],den=a-2*b+c;
+  const p=isFinite(den)&&den!==0?Math.max(-.5,Math.min(.5,.5*(a-c)/den)):0;
+  return {f:(k+p)*bw,d:p?b-.25*(a-c)*p:b}}
+const dbAt=f=>{const N=fb.length,k=f/map.bw,i=Math.floor(k);return i>=N-1?fb[N-1]:fb[i]+(fb[i+1]-fb[i])*(k-i)};
+$('spec').addEventListener('click',e=>{
+  if(!map)return;
+  const r=$('spec').getBoundingClientRect(),x=e.clientX-r.left;
+  let f=map.fOf(x);
+  if($('snap').checked&&haveF&&fb){
+    const N=fb.length,a=Math.max(1,Math.floor(map.fOf(Math.max(0,x-12))/map.bw)),b=Math.min(N-2,Math.ceil(map.fOf(x+12)/map.bw));
+    let k=-1,m=-1e9;for(let i=a;i<=b;i++)if(fb[i]>m){m=fb[i];k=i}
+    if(k>0&&m>DBB)f=pk(k).f;
+  }
+  curs.push({f,c:PAL[nc++%PAL.length]});if(curs.length>12)curs.shift();$('clrC').hidden=false;
+});
+$('clrC').onclick=()=>{curs=[];nc=0;$('clrC').hidden=true};
+
+/* ---------- Schermo intero ---------- */
+const FS_IN='<svg viewBox="0 0 24 24"><path d="M3 9V3h6M15 3h6v6M21 15v6h-6M9 21H3v-6"/></svg>';
+const FS_OUT='<svg viewBox="0 0 24 24"><path d="M9 3v6H3M21 9h-6V3M15 21v-6h6M3 15h6v6"/></svg>';
+const fsEl=()=>document.fullscreenElement||document.webkitFullscreenElement;
+const isFs=el=>fsEl()===el||el.classList.contains('fs');
+function setIcons(){for(const b of document.querySelectorAll('.fsb')){const on=isFs($(b.dataset.t));b.innerHTML=on?FS_OUT:FS_IN;b.setAttribute('aria-label',on?'Esci da schermo intero':'Schermo intero')}}
+async function toggleFs(el){
+  if(isFs(el)){
+    if(fsEl()){const ex=document.exitFullscreen||document.webkitExitFullscreen;try{await ex.call(document)}catch(_){}}
+    el.classList.remove('fs');document.body.style.overflow='';
+  }else{
+    let ok=false;const req=el.requestFullscreen||el.webkitRequestFullscreen;
+    if(req){try{await req.call(el);ok=!!fsEl()}catch(_){}}
+    if(!ok){el.classList.add('fs');document.body.style.overflow='hidden'}
+    try{await screen.orientation.lock('landscape')}catch(_){}
+  }
+  setIcons();
+}
+for(const b of document.querySelectorAll('.fsb'))b.onclick=()=>toggleFs($(b.dataset.t));
+const onFsChange=()=>{if(!fsEl()){try{screen.orientation.unlock()}catch(_){}}setIcons()};
+document.addEventListener('fullscreenchange',onFsChange);document.addEventListener('webkitfullscreenchange',onFsChange);
+addEventListener('keydown',e=>{if(e.key==='Escape')for(const s of document.querySelectorAll('.screen.fs')){s.classList.remove('fs');document.body.style.overflow='';setIcons()}});
+setIcons();
 
 /* ---------- Disegno ---------- */
 function fit(c){
@@ -301,6 +353,20 @@ function drawScope(){
 function linTicks(ny,W){const st=[100,200,500,1000,2000,5000,10000].find(s=>ny/s<=W/70)||10000;const a=[];for(let f=st;f<ny;f+=st)a.push(f);return a}
 const kLab=f=>f>=1000?nf(f/1000,1)+'k':String(f);
 
+function drawCurs(g,W,H,xOf){
+  if(curs.length){
+    const items=curs.map(o=>({f:o.f,c:o.c,x:xOf(o.f)})).filter(o=>o.x>=0&&o.x<=W).sort((a,b)=>a.x-b.x),rows=[];
+    g.setLineDash([5,4]);g.lineWidth=1.4;
+    for(const o of items){const x=Math.round(o.x)+.5;g.strokeStyle=o.c;g.beginPath();g.moveTo(x,0);g.lineTo(x,H);g.stroke()}
+    g.setLineDash([]);g.font='600 12px Inter,system-ui,sans-serif';g.textAlign='left';
+    for(const o of items){
+      const d=haveF?dbAt(o.f):-Infinity,t=fmtHz(o.f)+(d>DBB?' · '+nf(d,1)+' dB':''),tw=g.measureText(t).width+12;
+      const bx=Math.min(Math.max(o.x-tw/2,2),W-tw-2);let r=0;while(rows[r]!==undefined&&rows[r]>bx-4)r++;rows[r]=bx+tw;
+      const by=H-46-r*24;
+      g.fillStyle=o.c;g.fillRect(bx,by,tw,20);g.fillStyle='#1d1600';g.fillText(t,bx+6,by+14);
+    }
+  }
+}
 function drawSpec(){
   const [g,W,H]=fit($('spec'));
   g.fillStyle=SCR;g.fillRect(0,0,W,H);
@@ -318,8 +384,9 @@ function drawSpec(){
   shown.forEach(f=>{if(f<ny){const x=xOf(f);if(x>20&&x<W-20)g.fillText(kLab(f),x,H-8)}});
   g.textAlign='left';
   for(let d=-20;d>DBB;d-=narrow?40:20)g.fillText(d+' dB',6,yOf(d)+15);
-  if(!haveF){msg(g,W,H,'Lo spettro compare quando c\'è un segnale');$('rPk').textContent=$('rPkDb').textContent='—';return}
-  const N=fb.length,bw=sr()/spA.fftSize,Wi=Math.ceil(W);
+  const bw=sr()/(+$('fftN').value);map={fOf,xOf,bw};
+  if(!haveF){msg(g,W,H,'Lo spettro compare quando c\'è un segnale');$('rPk').textContent=$('rPkDb').textContent='—';g.save();drawCurs(g,W,H,xOf);g.restore();return}
+  const N=fb.length,Wi=Math.ceil(W);
   const valAt=(arr,x)=>{const k0=fOf(x)/bw,k1=fOf(x+1)/bw;
     if(k1-k0<1){const k=(k0+k1)/2,i=Math.floor(k),t=k-i;return i>=N-1?arr[N-1]:arr[i]*(1-t)+arr[i+1]*t}
     let m=-300;const e=Math.min(N-1,Math.floor(k1));for(let i=Math.ceil(k0);i<=e;i++)if(arr[i]>m)m=arr[i];return m};
@@ -344,11 +411,12 @@ function drawSpec(){
     g.font='600 13px Inter,system-ui,sans-serif';const t=fmtHz(fp),tw=g.measureText(t).width;
     g.textAlign='left';g.fillText(t,Math.min(Math.max(x+8,4),W-tw-6),Math.max(y-8,30));
   }else{$('rPk').textContent=$('rPkDb').textContent='—'}
+  drawCurs(g,W,H,xOf);
   if(curX>=0&&curX<=W){
     const f=fOf(curX),d=valAt(fb,curX),t=fmtHz(f)+' · '+(d>DBB?nf(d,1)+' dB':'—');
     g.strokeStyle='rgba(230,245,200,.5)';g.beginPath();g.moveTo(curX+.5,0);g.lineTo(curX+.5,H);g.stroke();
     g.font='13px Inter,system-ui,sans-serif';const tw=g.measureText(t).width,bx=Math.min(curX+8,W-tw-14);
-    g.fillStyle='rgba(6,42,36,.9)';g.fillRect(bx,28,tw+10,22);g.fillStyle=TRACE;g.fillText(t,bx+5,44);
+    g.fillStyle='rgba(6,42,36,.9)';g.fillRect(bx,54,tw+10,22);g.fillStyle=TRACE;g.fillText(t,bx+5,70);
   }
   g.restore();
 }
